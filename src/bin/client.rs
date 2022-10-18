@@ -1,5 +1,6 @@
 //use std::net::TcpStream;
 use std::time::{Instant, Duration};
+use std::collections::VecDeque;
 
 #[allow(unused)] 
 mod raylib {
@@ -228,6 +229,9 @@ mod raylib {
         pub const DARKGRAY: Color = Color {
             x: 80, y: 80, z: 80, w: 255
         };
+        pub const MEDGRAY: Color = Color {
+            x: 170, y: 170, z: 170, w: 255
+        };
     }
 
     #[link(name = "raylib")]
@@ -254,6 +258,13 @@ mod raylib {
             font_size: f32,
             spacing: f32
         ) -> Vector2;
+        fn DrawRectangle(
+            pos_x: i32,
+            pos_y: i32,
+            width: i32,
+            height: i32,
+            color: Color
+        );
         fn ClearBackground(color: Color);
         fn WindowShouldClose() -> bool;
         fn IsWindowResized() -> bool;
@@ -318,6 +329,16 @@ mod raylib {
         }
     }
 
+    pub fn draw_rectangle(
+        pos_x: i32,
+        pos_y: i32,
+        width: i32,
+        height: i32,
+        color: Color
+    ) {
+        unsafe { DrawRectangle(pos_x, pos_y, width, height, color); }
+    }
+
     pub fn clear_background(color: Color) {
         unsafe { ClearBackground(color); }
     }
@@ -351,49 +372,74 @@ fn get_font_size(width: i32, text: &[u8]) -> i32 {
     fsize - 1
 }
 
-fn draw_lines(
-    text: &[u8], x: i32, y: i32, width: i32, font_size: i32
+fn measure_text_lines(
+    text: &[u8], width: i32, font_size: i32
+) -> i32 {
+    let mut x: i32 = 0;
+    let mut y: i32 = 0;
+    let mut words = text.split(|&c| {
+        c == b' '
+    });
+    let x_offset = font_size / 2;
+    let y_offset = font_size + (font_size / 4);
+
+    while let Some(word) = words.next() {
+        let word_width = raylib::measure_text(&word, font_size);
+
+        if x + word_width > width {
+            x = 0;
+            y += y_offset;
+        }
+ 
+        x += word_width + x_offset;
+    }
+    y + y_offset
+}
+
+fn draw_text_lines(
+    text: &[u8], start_x: i32, start_y: i32, width: i32,
+    font_size: i32, show_cursor: bool, cursor_pos: usize
 ) {
-    let mut i: usize = 0;
-    let mut j: usize = 1;
-    let mut lines: i32 = 0;
-    while j <= text.len() {
-        if j < text.len() && j == i + 1 && text[i] == b' ' {
-            i += 1;
-            j = i + 1;
+    let mut x = 0;
+    let mut y = 0;
+    let mut ccount = 0;
+    let mut words = text.split(|&c| {
+        c == b' '
+    });
+    let x_offset = font_size / 2;
+    let y_offset = font_size + (font_size / 4);
+
+    while let Some(word) = words.next() {
+        let word_width = raylib::measure_text(&word, font_size);
+
+        if x + word_width > width {
+            x = 0;
+            y += y_offset;
         }
 
-        let y_offset = (font_size + (font_size / 4)) * lines;
+        if show_cursor && cursor_pos >= ccount 
+            && ccount + word.len() >= cursor_pos
+        {
+            let char_offset = cursor_pos - ccount;
+            let cx1 = raylib::measure_text(
+                &word[0..char_offset], font_size
+            );
+            raylib::draw_rectangle(
+                start_x + x + cx1, start_y + y, 2, font_size,
+                raylib::color::RAYWHITE
+            );
+        }
 
-        let twidth = if (j - i) < 40 { 0 }
-            else { raylib::measure_text(&text[i..j], font_size) };
+        raylib::draw_text(
+            &word,
+            start_x + x,
+            start_y + y,
+            font_size,
+            raylib::color::RAYWHITE
+        );
         
-        if j == text.len() {
-            raylib::draw_text(
-                &text[i..j],
-                x,
-                y + y_offset,
-                font_size,
-                raylib::color::RAYWHITE
-            );
-        } else if text[j - 1] == b'\n' || twidth > (width - 75) {
-            if text[j] != b'_' && text[j - 1] != b'\n' {
-                while text[j] != b'\n' && text[j] != b' ' {
-                    j -= 1;
-                    if j == 0 { break; }
-                }
-            }
-            raylib::draw_text(
-                &text[i..j],
-                x,
-                y + y_offset,
-                font_size,
-                raylib::color::RAYWHITE
-            );
-            i = j;
-            lines += 1;
-        }
-        j += 1
+        x += word_width + x_offset;
+        ccount += word.len() + 1;
     }
 }
 
@@ -408,9 +454,13 @@ fn main() {
 
     const TEST_WTEXT: [u8; 64] = [b'w'; 64];
     const TEST_NTEXT: [u8; 48] = [b'w'; 48];
+    const MCAPACITY: usize = 100;
 
+    let mut messages = VecDeque::<Vec::<u8>>::with_capacity(
+        MCAPACITY
+    );
     let mut text = Vec::<u8>::new();
-    let mut caps: bool = false;
+
     let mut width: i32 = raylib::get_screen_width();
     let mut height: i32 = raylib::get_screen_height();
     let mut font_size: i32 = if width > height {
@@ -418,76 +468,163 @@ fn main() {
     } else {
         get_font_size(width - 75, &TEST_NTEXT)
     };
+
+    let mut caps: bool = false;
     let mut show_cursor: bool = true;
+    let mut cursor_pos: usize = 0;
+    let mut mshift: i32 = 0;
+    let mut can_shift_up: bool = false;
 
     let mut cursor_inst: Instant = Instant::now();
     let cursor_tstep: Duration = Duration::from_millis(500);
     
-    let mut bspace_inst: Instant = Instant::now();
-    let mut bspace_start: Instant = Instant::now();
-    let bspace_start_tstep: Duration = Duration::from_millis(500);
-    let bspace_tstep: Duration = Duration::from_millis(50);
+    let mut held_inst: Instant = Instant::now();
+    let mut held_start: Instant = Instant::now();
+    let mut held_key: i32 = 0;
+    let held_start_tstep: Duration = Duration::from_millis(490);
+    let held_tstep: Duration = Duration::from_millis(50);
 
     //stream.set_nonblocking(true).expect("Cannot set non-blocking");
     while !raylib::window_should_close() {
-        let key = raylib::keyboard::get_key_pressed();
+        let mut key = raylib::keyboard::get_key_pressed();
         let shift = !raylib::keyboard::is_key_up(
             raylib::keyboard::LEFT_SHIFT
         ) || !raylib::keyboard::is_key_up(
             raylib::keyboard::RIGHT_SHIFT
         );
-        let bspace = !raylib::keyboard::is_key_up(
-            raylib::keyboard::BACKSPACE
-        );
+       
+        if key != 0 {
+            held_key = key;
+            held_inst = Instant::now();
+            held_start = Instant::now();
+        } else if held_key != 0 {
+            if !raylib::keyboard::is_key_up(held_key) {
+                if held_start.elapsed() > held_start_tstep {
+                    if held_inst.elapsed() > held_tstep {
+                        held_inst = Instant::now();
+                    }
+                    key = held_key;
+                }
+            } else {
+                held_key = 0;
+            }
+        }
 
         if key == raylib::keyboard::CAPS_LOCK {
             caps = !caps;
         } else if key == raylib::keyboard::BACKSPACE {
-            text.pop();
-            show_cursor = true;
-            bspace_start = Instant::now();
+            if cursor_pos > 0 {
+                text.remove(cursor_pos - 1);
+                cursor_pos -= 1;
+                show_cursor = true;
+            }
             cursor_inst = Instant::now();
+        } else if key == raylib::keyboard::LEFT {
+            if cursor_pos > 0 {
+                cursor_pos -= 1;
+            }
+            show_cursor = true;
+            cursor_inst = Instant::now();
+        } else if key == raylib::keyboard::RIGHT {
+            if cursor_pos < text.len() {
+                cursor_pos += 1;
+            }
+            show_cursor = true;
+            cursor_inst = Instant::now();
+        } else if key == raylib::keyboard::UP {
+            if can_shift_up {
+                mshift += 1;
+            }
+        } else if key == raylib::keyboard::DOWN {
+            if mshift > 0 {
+                mshift -= 1;
+            }
+        } else if key == raylib::keyboard::ENTER {
+            if text.len() > 0 {
+                if messages.len() >= MCAPACITY {
+                    messages.pop_front();
+                }
+                messages.push_back(text.clone());
+                mshift = 0;
+            }
+            text.clear();
+            cursor_pos = 0;
         } else if let Some(c) = raylib::keyboard::get_char(
             key, shift, caps
         ) {
-            text.push(c);
+            text.insert(cursor_pos, c);
+            cursor_pos += 1;
             show_cursor = true;
             cursor_inst = Instant::now();
-        }
-
-        if bspace && bspace_start.elapsed() > bspace_start_tstep {
-            if bspace_inst.elapsed() > bspace_tstep {
-                show_cursor = true;
-                text.pop();
-                cursor_inst = Instant::now();
-                bspace_inst = Instant::now();
-            }
         }
 
         if raylib::is_window_resized() {
             width = raylib::get_screen_width();
             height = raylib::get_screen_height();
             font_size = if width > height {
-                get_font_size(width - 75, &TEST_WTEXT)
+                get_font_size(width - 20, &TEST_WTEXT)
             } else {
-                get_font_size(width - 75, &TEST_NTEXT)
+                get_font_size(width - 20, &TEST_NTEXT)
             };
         }
 
-        raylib::begin_drawing(); 
-        raylib::clear_background(raylib::color::DARKGRAY);
-        if show_cursor {
-            text.push(b'_');
-        }
-        draw_lines(&text, 30, 30, width, font_size); 
-        if show_cursor {
-            text.pop();
-        }
-        raylib::end_drawing();
+        let line_width = font_size + font_size / 4;
+        let typing_height = measure_text_lines(
+            &text, width - 50, font_size
+        );
+        let typing_y = height - line_width - typing_height;
 
         if cursor_inst.elapsed() > cursor_tstep {
             show_cursor = !show_cursor;
             cursor_inst = Instant::now();
         }
+
+        let mut message_y: i32 = typing_y + mshift * line_width;
+        can_shift_up = false;
+
+        raylib::begin_drawing(); 
+        raylib::clear_background(raylib::color::DARKGRAY);
+
+        // draw messages
+        for message in messages.iter().rev() {
+            let message_height = measure_text_lines(
+                &message, width - 50, font_size
+            );
+            if message_y - message_height < line_width {
+                can_shift_up = true;
+            }
+            message_y -= message_height + line_width;
+
+            draw_text_lines(
+                &message, 30, message_y, width - 50,
+                font_size, false, 0
+            ); 
+        }
+
+        // top border box
+        raylib::draw_rectangle(
+            0, 0, width,
+            10,
+            raylib::color::DARKGRAY
+        );
+
+        // bottom border box
+        raylib::draw_rectangle(
+            0, typing_y - line_width, width,
+            height - typing_y + line_width,
+            raylib::color::DARKGRAY
+        );
+
+        // typing box
+        raylib::draw_text(
+            &[b'>'], 15, typing_y, font_size,
+            raylib::color::RAYWHITE
+        );
+        draw_text_lines(
+            &text, 30, typing_y, width - 50,
+            font_size, show_cursor, cursor_pos
+        ); 
+
+        raylib::end_drawing();
     }
 }
