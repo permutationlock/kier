@@ -2,7 +2,7 @@
 use std::time::{Instant, Duration};
 use std::collections::VecDeque;
 
-use krynth::raylib;
+use kier::raylib;
 
 fn measure_text_lines(
     text: &[u8], width: i32, font_size: i32

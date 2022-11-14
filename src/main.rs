@@ -1,18 +1,18 @@
-use std::io;
-use std::io::Read;
-use std::net::{TcpListener, TcpStream};
-use std::collections::VecDeque;
-use std::os::unix::io::{AsRawFd, RawFd};
+/*use std::sync::Arc;
 
-#[allow(unused_macros)]
-macro_rules! syscall {
-    ($fn: ident ( $($arg: expr),* $(,)* ) ) => {{
-        match unsafe { libc::$fn($($arg, )*) } {
-            -1 => Err(io::Error::last_os_error()),
-            res => Ok(res)
-        }
-    }}
-}
+use mio::net::{TcpListener, TcpStream};
+
+use std::collections::HashMap;
+use std::fs;
+use std::io;
+use std::io::{BufReader, Read, Write};
+use std::net;
+
+use rustls::server::{
+    AllowAnyAnonymousOrAuthenticatedClient, AllowAnyAuthenticatedClient, NoClientAuth,
+};
+
+use rustls::{self, RootCertStore};
 
 const BUFFSIZE: usize = 50;
 const NCONNS: usize = 100;
@@ -195,4 +195,7 @@ fn main() -> io::Result<()> {
             }
         }
     }
+}*/
+
+pub fn main() {
 }
