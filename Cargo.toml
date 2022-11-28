@@ -8,7 +8,6 @@ default = ["logging"]
 logging = ["log"]
 
 [dependencies]
-raylib = { path = "../raylib" }
 env_logger = "0.9"
 libc = "0.2"
 rustls = "0.20"

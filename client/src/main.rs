@@ -1,4 +1,3 @@
-//use std::net::TcpStream;
 use std::time::{Instant, Duration};
 use std::collections::VecDeque;
 
@@ -75,15 +74,15 @@ fn draw_text_lines(
     }
 }
 
+const MCAPACITY: usize = 100;
+const MTEXT_LEN: usize = 10000;
+const FONT_SIZE: i32 = 24;
+const LINE_HEIGHT: i32 = FONT_SIZE + FONT_SIZE / 4;
+
 fn main() {
     raylib::set_config_flags(raylib::flags::WINDOW_RESIZABLE);
     raylib::init_window(640, 480, "raylib rust test");
     raylib::set_target_fps(30);
-
-    const MCAPACITY: usize = 100;
-    const MTEXT_LEN: usize = 10000;
-    const FONT_SIZE: i32 = 24;
-    const LINE_HEIGHT: i32 = FONT_SIZE + FONT_SIZE / 4;
 
     let mut messages = VecDeque::<Vec::<u8>>::with_capacity(
         MCAPACITY
