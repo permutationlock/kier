@@ -2,7 +2,7 @@
 use std::time::{Instant, Duration};
 use std::collections::VecDeque;
 
-use kier::raylib;
+extern crate raylib;
 
 fn measure_text_lines(
     text: &[u8], width: i32, font_size: i32
@@ -76,10 +76,6 @@ fn draw_text_lines(
 }
 
 fn main() {
-    //let mut sstream = TcpStream::connect("127.0.0.1:9090").unwrap();
-    //let mut stdin = io::stdin();
-    //let mut buffer : [u8; 50] = [0; 50];
-
     raylib::set_config_flags(raylib::flags::WINDOW_RESIZABLE);
     raylib::init_window(640, 480, "raylib rust test");
     raylib::set_target_fps(30);
