@@ -1,5 +1,3 @@
-use wasm_timer::Instant;
-use std::time::Duration;
 use std::collections::VecDeque;
 
 #[cfg(target_family = "wasm")]
@@ -114,13 +112,13 @@ struct DisplayData {
     cursor_pos: usize,
     mshift: i32,
     can_shift_up: bool,
-    cursor_inst: Instant,
-    cursor_tstep: Duration,
-    held_inst: Instant,
-    held_start: Instant,
+    cursor_inst: u32,
+    cursor_tstep: u32,
+    held_inst: u32,
+    held_start: u32,
     held_key: i32,
-    held_start_tstep: Duration,
-    held_tstep: Duration,
+    held_start_tstep: u32,
+    held_tstep: u32,
 }
 
 fn main_loop() {
@@ -128,6 +126,13 @@ fn main_loop() {
     unsafe {
         data = DISPLAY_DATA.as_mut().unwrap();
     }
+
+    data.cursor_inst += 1;
+    data.held_start += 1;
+    data.held_inst += 1;
+
+    let mut keys: [i32; 32] = [0; 32];
+    let mut nkeys = 0;
 
     let mut key = raylib::keyboard::get_key_pressed();
     let shift = !raylib::keyboard::is_key_up(
@@ -137,84 +142,80 @@ fn main_loop() {
     );
  
     if key != 0 {
-        println!("key: {}, time: {}", key, data.held_inst.elapsed().as_millis());
+        println!("key: {}, time: {}", key, data.held_inst);
         data.held_key = key;
-        data.held_start = Instant::now();
+        data.held_start = 0;
     } else if data.held_key != 0 {
         if !raylib::keyboard::is_key_up(data.held_key) {
-            if data.held_start.elapsed()
-                > data.held_start_tstep
+            if data.held_start > data.held_start_tstep
             {
-                key = data.held_key;
+                if data.held_inst > data.held_tstep {
+                    key = data.held_key;
+                    data.held_inst = 0;
+                }
             }
         } else {
             data.held_key = 0;
         }
     }
 
-    if data.held_inst.elapsed() > data.held_tstep {
-        if key != 0 {
-            data.held_inst = Instant::now();
-        }
-
-        match key {
-            raylib::keyboard::CAPS_LOCK => data.caps = !data.caps,
-            raylib::keyboard::BACKSPACE => {
-                if data.cursor_pos > 0 {
-                    data.text.remove(data.cursor_pos - 1);
-                    data.cursor_pos -= 1;
-                    data.show_cursor = true;
-                }
-                data.cursor_inst = Instant::now();
-            },
-            raylib::keyboard::LEFT => {
-                if data.cursor_pos > 0 {
-                    data.cursor_pos -= 1;
-                }
+    match key {
+        raylib::keyboard::CAPS_LOCK => data.caps = !data.caps,
+        raylib::keyboard::BACKSPACE => {
+            if data.cursor_pos > 0 {
+                data.text.remove(data.cursor_pos - 1);
+                data.cursor_pos -= 1;
                 data.show_cursor = true;
-                data.cursor_inst = Instant::now();
-            },
-            raylib::keyboard::RIGHT => {
-                if data.cursor_pos < data.text.len() {
+            }
+            data.cursor_inst = 0;
+        },
+        raylib::keyboard::LEFT => {
+            if data.cursor_pos > 0 {
+                data.cursor_pos -= 1;
+            }
+            data.show_cursor = true;
+            data.cursor_inst = 0;
+        },
+        raylib::keyboard::RIGHT => {
+            if data.cursor_pos < data.text.len() {
+                data.cursor_pos += 1;
+            }
+            data.show_cursor = true;
+            data.cursor_inst = 0;
+        },
+        raylib::keyboard::UP => {
+            if data.can_shift_up {
+                data.mshift += 1;
+            }
+        },
+        raylib::keyboard::DOWN => {
+            if data.mshift > 0 {
+                data.mshift -= 1;
+            }
+        },
+        raylib::keyboard::ENTER => {
+            if data.text.len() > 0 {
+                if data.messages.len() >= MCAPACITY {
+                    data.messages.pop_front();
+                }
+                data.messages.push_back(data.text.clone());
+                data.mshift = 0;
+            }
+            data.text.clear();
+            data.cursor_pos = 0;
+        },
+        key => {
+            if let Some(c) = raylib::keyboard::get_char(
+                key, shift, data.caps
+            ) {
+                if data.text.len() < MTEXT_LEN {
+                    data.text.insert(data.cursor_pos, c);
                     data.cursor_pos += 1;
+                    data.show_cursor = true;
+                    data.cursor_inst = 0;
                 }
-                data.show_cursor = true;
-                data.cursor_inst = Instant::now();
-            },
-            raylib::keyboard::UP => {
-                if data.can_shift_up {
-                    data.mshift += 1;
-                }
-            },
-            raylib::keyboard::DOWN => {
-                if data.mshift > 0 {
-                    data.mshift -= 1;
-                }
-            },
-            raylib::keyboard::ENTER => {
-                if data.text.len() > 0 {
-                    if data.messages.len() >= MCAPACITY {
-                        data.messages.pop_front();
-                    }
-                    data.messages.push_back(data.text.clone());
-                    data.mshift = 0;
-                }
-                data.text.clear();
-                data.cursor_pos = 0;
-            },
-            key => {
-                if let Some(c) = raylib::keyboard::get_char(
-                    key, shift, data.caps
-                ) {
-                    if data.text.len() < MTEXT_LEN {
-                        data.text.insert(data.cursor_pos, c);
-                        data.cursor_pos += 1;
-                        data.show_cursor = true;
-                        data.cursor_inst = Instant::now();
-                    }
-                }
-            },
-        }
+            }
+        },
     }
 
     if raylib::is_window_resized() {
@@ -228,9 +229,9 @@ fn main_loop() {
     );
     let typing_y = data.height - LINE_HEIGHT - typing_height;
 
-    if data.cursor_inst.elapsed() > data.cursor_tstep {
+    if data.cursor_inst > data.cursor_tstep {
         data.show_cursor = !data.show_cursor;
-        data.cursor_inst = Instant::now();
+        data.cursor_inst = 0;
     }
 
     let mut message_y: i32 = typing_y + data.mshift * LINE_HEIGHT;
@@ -313,13 +314,13 @@ fn main() {
         cursor_pos: 0,
         mshift: 0,
         can_shift_up: false,
-        cursor_inst: Instant::now(),
-        cursor_tstep: Duration::from_millis(500),
-        held_inst: Instant::now(),
-        held_start: Instant::now(),
+        cursor_inst: 0,
+        cursor_tstep: 31,
+        held_inst: 0,
+        held_start: 0,
         held_key: 0,
-        held_start_tstep: Duration::from_millis(490),
-        held_tstep: Duration::from_millis(16),
+        held_start_tstep: 30,
+        held_tstep: 2,
     };
 
     unsafe {
