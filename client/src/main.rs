@@ -1,5 +1,29 @@
-use std::time::{Instant, Duration};
+use wasm_timer::Instant;
+use std::time::Duration;
 use std::collections::VecDeque;
+
+#[cfg(target_family = "wasm")]
+extern "C" {
+    fn emscripten_set_main_loop(
+        loop_fn: extern "C" fn(),
+        fps: i32,
+        sim_infinite_loop: i32
+    );
+}
+
+#[cfg(target_family = "wasm")]
+#[no_mangle]
+pub extern "C" fn on_resize(
+    width: i32,
+    height: i32
+) {
+    raylib::set_window_size(width, height);
+}
+
+#[cfg(target_family = "wasm")]
+extern "C" fn em_main_loop() {
+    main_loop();
+}
 
 extern crate raylib;
 
@@ -79,193 +103,245 @@ const MTEXT_LEN: usize = 10000;
 const FONT_SIZE: i32 = 24;
 const LINE_HEIGHT: i32 = FONT_SIZE + FONT_SIZE / 4;
 
-fn main() {
-    raylib::set_config_flags(raylib::flags::WINDOW_RESIZABLE);
-    raylib::init_window(640, 480, "raylib rust test");
-    raylib::set_target_fps(30);
+#[repr(C)]
+struct DisplayData {
+    messages: VecDeque::<Vec::<u8>>,
+    text: Vec::<u8>,
+    width: i32,
+    height: i32,
+    caps: bool,
+    show_cursor: bool,
+    cursor_pos: usize,
+    mshift: i32,
+    can_shift_up: bool,
+    cursor_inst: Instant,
+    cursor_tstep: Duration,
+    held_inst: Instant,
+    held_start: Instant,
+    held_key: i32,
+    held_start_tstep: Duration,
+    held_tstep: Duration,
+}
 
-    let mut messages = VecDeque::<Vec::<u8>>::with_capacity(
-        MCAPACITY
+fn main_loop() {
+    let mut data: &mut DisplayData;
+    unsafe {
+        data = DISPLAY_DATA.as_mut().unwrap();
+    }
+
+    let mut key = raylib::keyboard::get_key_pressed();
+    let shift = !raylib::keyboard::is_key_up(
+        raylib::keyboard::LEFT_SHIFT
+    ) || !raylib::keyboard::is_key_up(
+        raylib::keyboard::RIGHT_SHIFT
     );
-    let mut text = Vec::<u8>::new();
-
-    let mut width: i32 = raylib::get_screen_width();
-    let mut height: i32 = raylib::get_screen_height();
-
-    let mut caps: bool = false;
-    let mut show_cursor: bool = true;
-    let mut cursor_pos: usize = 0;
-    let mut mshift: i32 = 0;
-    let mut can_shift_up: bool = false;
-
-    let mut cursor_inst: Instant = Instant::now();
-    let cursor_tstep: Duration = Duration::from_millis(500);
-    
-    let mut held_inst: Instant = Instant::now();
-    let mut held_start: Instant = Instant::now();
-    let mut held_key: i32 = 0;
-    let held_start_tstep: Duration = Duration::from_millis(490);
-    let held_tstep: Duration = Duration::from_millis(30);
-
-    //stream.set_nonblocking(true).expect("Cannot set non-blocking");
-    while !raylib::window_should_close() {
-        let mut key = raylib::keyboard::get_key_pressed();
-        let shift = !raylib::keyboard::is_key_up(
-            raylib::keyboard::LEFT_SHIFT
-        ) || !raylib::keyboard::is_key_up(
-            raylib::keyboard::RIGHT_SHIFT
-        );
-       
-        if key != 0 {
-            held_key = key;
-            held_inst = Instant::now();
-            held_start = Instant::now();
-        } else if held_key != 0 {
-            if !raylib::keyboard::is_key_up(held_key) {
-                if held_start.elapsed() > held_start_tstep {
-                    if held_inst.elapsed() > held_tstep {
-                        held_inst = Instant::now();
-                        key = held_key;
-                    }
-                }
-            } else {
-                held_key = 0;
+ 
+    if key != 0 {
+        println!("key: {}, time: {}", key, data.held_inst.elapsed().as_millis());
+        data.held_key = key;
+        data.held_start = Instant::now();
+    } else if data.held_key != 0 {
+        if !raylib::keyboard::is_key_up(data.held_key) {
+            if data.held_start.elapsed()
+                > data.held_start_tstep
+            {
+                key = data.held_key;
             }
+        } else {
+            data.held_key = 0;
+        }
+    }
+
+    if data.held_inst.elapsed() > data.held_tstep {
+        if key != 0 {
+            data.held_inst = Instant::now();
         }
 
         match key {
-            raylib::keyboard::CAPS_LOCK => caps = !caps,
+            raylib::keyboard::CAPS_LOCK => data.caps = !data.caps,
             raylib::keyboard::BACKSPACE => {
-                if cursor_pos > 0 {
-                    text.remove(cursor_pos - 1);
-                    cursor_pos -= 1;
-                    show_cursor = true;
+                if data.cursor_pos > 0 {
+                    data.text.remove(data.cursor_pos - 1);
+                    data.cursor_pos -= 1;
+                    data.show_cursor = true;
                 }
-                cursor_inst = Instant::now();
+                data.cursor_inst = Instant::now();
             },
             raylib::keyboard::LEFT => {
-                if cursor_pos > 0 {
-                    cursor_pos -= 1;
+                if data.cursor_pos > 0 {
+                    data.cursor_pos -= 1;
                 }
-                show_cursor = true;
-                cursor_inst = Instant::now();
+                data.show_cursor = true;
+                data.cursor_inst = Instant::now();
             },
             raylib::keyboard::RIGHT => {
-                if cursor_pos < text.len() {
-                    cursor_pos += 1;
+                if data.cursor_pos < data.text.len() {
+                    data.cursor_pos += 1;
                 }
-                show_cursor = true;
-                cursor_inst = Instant::now();
+                data.show_cursor = true;
+                data.cursor_inst = Instant::now();
             },
             raylib::keyboard::UP => {
-                if can_shift_up {
-                    mshift += 1;
+                if data.can_shift_up {
+                    data.mshift += 1;
                 }
             },
             raylib::keyboard::DOWN => {
-                if mshift > 0 {
-                    mshift -= 1;
+                if data.mshift > 0 {
+                    data.mshift -= 1;
                 }
             },
             raylib::keyboard::ENTER => {
-                if text.len() > 0 {
-                    if messages.len() >= MCAPACITY {
-                        messages.pop_front();
+                if data.text.len() > 0 {
+                    if data.messages.len() >= MCAPACITY {
+                        data.messages.pop_front();
                     }
-                    messages.push_back(text.clone());
-                    mshift = 0;
+                    data.messages.push_back(data.text.clone());
+                    data.mshift = 0;
                 }
-                text.clear();
-                cursor_pos = 0;
+                data.text.clear();
+                data.cursor_pos = 0;
             },
             key => {
                 if let Some(c) = raylib::keyboard::get_char(
-                    key, shift, caps
+                    key, shift, data.caps
                 ) {
-                    if text.len() < MTEXT_LEN {
-                        text.insert(cursor_pos, c);
-                        cursor_pos += 1;
-                        show_cursor = true;
-                        cursor_inst = Instant::now();
+                    if data.text.len() < MTEXT_LEN {
+                        data.text.insert(data.cursor_pos, c);
+                        data.cursor_pos += 1;
+                        data.show_cursor = true;
+                        data.cursor_inst = Instant::now();
                     }
                 }
             },
         }
+    }
 
-        if raylib::is_window_resized() {
-            width = raylib::get_screen_width();
-            height = raylib::get_screen_height();
-            mshift = 0;
-        }
+    if raylib::is_window_resized() {
+        data.width = raylib::get_screen_width();
+        data.height = raylib::get_screen_height();
+        data.mshift = 0;
+    }
 
-        let typing_height = measure_text_lines(
-            &text, width - 2 * LINE_HEIGHT, FONT_SIZE
-        );
-        let typing_y = height - LINE_HEIGHT - typing_height;
+    let typing_height = measure_text_lines(
+        &data.text, data.width - 2 * LINE_HEIGHT, FONT_SIZE
+    );
+    let typing_y = data.height - LINE_HEIGHT - typing_height;
 
-        if cursor_inst.elapsed() > cursor_tstep {
-            show_cursor = !show_cursor;
-            cursor_inst = Instant::now();
-        }
+    if data.cursor_inst.elapsed() > data.cursor_tstep {
+        data.show_cursor = !data.show_cursor;
+        data.cursor_inst = Instant::now();
+    }
 
-        let mut message_y: i32 = typing_y + mshift * LINE_HEIGHT;
-        can_shift_up = false;
+    let mut message_y: i32 = typing_y + data.mshift * LINE_HEIGHT;
+    data.can_shift_up = false;
 
-        raylib::begin_drawing(); 
-        raylib::clear_background(raylib::color::DARKGRAY);
+    raylib::begin_drawing(); 
+    raylib::clear_background(raylib::color::DARKGRAY);
 
-        // draw messages
-        for message in messages.iter().rev() {
-            let message_height = measure_text_lines(
-                &message, width - 2 * LINE_HEIGHT, FONT_SIZE
-            );
-
-            message_y -= message_height + LINE_HEIGHT;
-
-            if message_y < LINE_HEIGHT {
-                can_shift_up = true;
-            }
-
-            draw_text_lines(
-                &message,
-                LINE_HEIGHT,
-                message_y,
-                width - 2 * LINE_HEIGHT,
-                FONT_SIZE,
-                false,
-                0
-            ); 
-        }
-
-        // top border box
-        raylib::draw_rectangle(
-            0,
-            0,
-            width,
-            LINE_HEIGHT,
-            raylib::color::DARKGRAY
+    // draw messages
+    for message in data.messages.iter().rev() {
+        let message_height = measure_text_lines(
+            &message, data.width - 2 * LINE_HEIGHT, FONT_SIZE
         );
 
-        // bottom border box
-        raylib::draw_rectangle(
-            0,
-            typing_y - LINE_HEIGHT,
-            width,
-            height - typing_y + LINE_HEIGHT,
-            raylib::color::DARKGRAY
-        );
+        message_y -= message_height + LINE_HEIGHT;
 
-        // typing box
+        if message_y < LINE_HEIGHT {
+            data.can_shift_up = true;
+        }
+
         draw_text_lines(
-            &text,
+            &message,
             LINE_HEIGHT,
-            typing_y,
-            width - 2 * LINE_HEIGHT,
+            message_y,
+            data.width - 2 * LINE_HEIGHT,
             FONT_SIZE,
-            show_cursor,
-            cursor_pos
+            false,
+            0
         ); 
+    }
 
-        raylib::end_drawing();
+    // top border box
+    raylib::draw_rectangle(
+        0,
+        0,
+        data.width,
+        LINE_HEIGHT,
+        raylib::color::DARKGRAY
+    );
+
+    // bottom border box
+    raylib::draw_rectangle(
+        0,
+        typing_y - LINE_HEIGHT,
+        data.width,
+        data.height - typing_y + LINE_HEIGHT,
+        raylib::color::DARKGRAY
+    );
+
+    // typing box
+    draw_text_lines(
+        &data.text,
+        LINE_HEIGHT,
+        typing_y,
+        data.width - 2 * LINE_HEIGHT,
+        FONT_SIZE,
+        data.show_cursor,
+        data.cursor_pos
+    ); 
+
+    raylib::end_drawing();
+}
+
+static mut DISPLAY_DATA: Option<DisplayData> = None;
+
+fn main() {
+    raylib::set_config_flags(raylib::flags::WINDOW_RESIZABLE);
+    raylib::init_window(640, 480, "raylib rust test");
+    raylib::set_target_fps(60);
+
+    let data = DisplayData {
+        messages: VecDeque::<Vec::<u8>>::with_capacity(
+            MCAPACITY
+        ),
+        text: Vec::<u8>::new(),
+        width: raylib::get_screen_width(),
+        height: raylib::get_screen_height(),
+        caps: false,
+        show_cursor: true,
+        cursor_pos: 0,
+        mshift: 0,
+        can_shift_up: false,
+        cursor_inst: Instant::now(),
+        cursor_tstep: Duration::from_millis(500),
+        held_inst: Instant::now(),
+        held_start: Instant::now(),
+        held_key: 0,
+        held_start_tstep: Duration::from_millis(490),
+        held_tstep: Duration::from_millis(16),
+    };
+
+    unsafe {
+        DISPLAY_DATA = Some(data);
+    }
+
+    #[cfg(target_family = "wasm")]
+    unsafe {
+        emscripten_set_main_loop(
+            em_main_loop,
+            0,
+            1
+        );
+    }
+
+    #[cfg(target_family = "unix")]
+    while !raylib::window_should_close() {
+        main_loop();
+    }
+
+    #[cfg(target_family = "windows")]
+    while !raylib::window_should_close() {
+        main_loop();
     }
 }

@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 raylib = { path = "../../raylib" }
+wasm-timer = "0.2.5"
