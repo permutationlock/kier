@@ -119,6 +119,7 @@ struct DisplayData {
     held_key: i32,
     held_start_tstep: u32,
     held_tstep: u32,
+    draw_change: bool,
 }
 
 fn main_loop() {
@@ -131,9 +132,6 @@ fn main_loop() {
     data.held_start += 1;
     data.held_inst += 1;
 
-    let mut keys: [i32; 32] = [0; 32];
-    let mut nkeys = 0;
-
     let mut key = raylib::keyboard::get_key_pressed();
     let shift = !raylib::keyboard::is_key_up(
         raylib::keyboard::LEFT_SHIFT
@@ -142,7 +140,6 @@ fn main_loop() {
     );
  
     if key != 0 {
-        println!("key: {}, time: {}", key, data.held_inst);
         data.held_key = key;
         data.held_start = 0;
     } else if data.held_key != 0 {
@@ -159,29 +156,29 @@ fn main_loop() {
         }
     }
 
+    if key != 0 {
+        data.draw_change = true;
+        data.show_cursor = true;
+        data.cursor_inst = 0;
+    }
+
     match key {
         raylib::keyboard::CAPS_LOCK => data.caps = !data.caps,
         raylib::keyboard::BACKSPACE => {
             if data.cursor_pos > 0 {
                 data.text.remove(data.cursor_pos - 1);
                 data.cursor_pos -= 1;
-                data.show_cursor = true;
             }
-            data.cursor_inst = 0;
         },
         raylib::keyboard::LEFT => {
             if data.cursor_pos > 0 {
                 data.cursor_pos -= 1;
             }
-            data.show_cursor = true;
-            data.cursor_inst = 0;
         },
         raylib::keyboard::RIGHT => {
             if data.cursor_pos < data.text.len() {
                 data.cursor_pos += 1;
             }
-            data.show_cursor = true;
-            data.cursor_inst = 0;
         },
         raylib::keyboard::UP => {
             if data.can_shift_up {
@@ -211,8 +208,6 @@ fn main_loop() {
                 if data.text.len() < MTEXT_LEN {
                     data.text.insert(data.cursor_pos, c);
                     data.cursor_pos += 1;
-                    data.show_cursor = true;
-                    data.cursor_inst = 0;
                 }
             }
         },
@@ -222,6 +217,7 @@ fn main_loop() {
         data.width = raylib::get_screen_width();
         data.height = raylib::get_screen_height();
         data.mshift = 0;
+        data.draw_change = true;
     }
 
     let typing_height = measure_text_lines(
@@ -232,74 +228,81 @@ fn main_loop() {
     if data.cursor_inst > data.cursor_tstep {
         data.show_cursor = !data.show_cursor;
         data.cursor_inst = 0;
+        data.draw_change = true;
     }
 
-    let mut message_y: i32 = typing_y + data.mshift * LINE_HEIGHT;
-    data.can_shift_up = false;
-
     raylib::begin_drawing(); 
-    raylib::clear_background(raylib::color::DARKGRAY);
 
-    // draw messages
-    for message in data.messages.iter().rev() {
-        let message_height = measure_text_lines(
-            &message, data.width - 2 * LINE_HEIGHT, FONT_SIZE
-        );
+    if data.draw_change {
+        let mut message_y: i32 = typing_y + data.mshift * LINE_HEIGHT;
 
-        message_y -= message_height + LINE_HEIGHT;
+        data.draw_change = false;
+        data.can_shift_up = false;
 
-        if message_y < LINE_HEIGHT {
-            data.can_shift_up = true;
+        raylib::clear_background(raylib::color::DARKGRAY);
+
+        // draw messages
+        for message in data.messages.iter().rev() {
+            let message_height = measure_text_lines(
+                &message, data.width - 2 * LINE_HEIGHT, FONT_SIZE
+            );
+
+            message_y -= message_height + LINE_HEIGHT;
+
+            if message_y < LINE_HEIGHT {
+                data.can_shift_up = true;
+            }
+
+            draw_text_lines(
+                &message,
+                LINE_HEIGHT,
+                message_y,
+                data.width - 2 * LINE_HEIGHT,
+                FONT_SIZE,
+                false,
+                0
+            ); 
         }
 
-        draw_text_lines(
-            &message,
+        // top border box
+        raylib::draw_rectangle(
+            0,
+            0,
+            data.width,
             LINE_HEIGHT,
-            message_y,
+            raylib::color::DARKGRAY
+        );
+
+        // bottom border box
+        raylib::draw_rectangle(
+            0,
+            typing_y - LINE_HEIGHT,
+            data.width,
+            data.height - typing_y + LINE_HEIGHT,
+            raylib::color::DARKGRAY
+        );
+
+        // typing box
+        draw_text_lines(
+            &data.text,
+            LINE_HEIGHT,
+            typing_y,
             data.width - 2 * LINE_HEIGHT,
             FONT_SIZE,
-            false,
-            0
+            data.show_cursor,
+            data.cursor_pos
         ); 
     }
 
-    // top border box
-    raylib::draw_rectangle(
-        0,
-        0,
-        data.width,
-        LINE_HEIGHT,
-        raylib::color::DARKGRAY
-    );
-
-    // bottom border box
-    raylib::draw_rectangle(
-        0,
-        typing_y - LINE_HEIGHT,
-        data.width,
-        data.height - typing_y + LINE_HEIGHT,
-        raylib::color::DARKGRAY
-    );
-
-    // typing box
-    draw_text_lines(
-        &data.text,
-        LINE_HEIGHT,
-        typing_y,
-        data.width - 2 * LINE_HEIGHT,
-        FONT_SIZE,
-        data.show_cursor,
-        data.cursor_pos
-    ); 
-
-    raylib::end_drawing();
+    raylib::end_drawing();    
 }
 
 static mut DISPLAY_DATA: Option<DisplayData> = None;
 
 fn main() {
     raylib::set_config_flags(raylib::flags::WINDOW_RESIZABLE);
-    raylib::init_window(640, 480, "raylib rust test");
+    raylib::init_window(640, 480, "Client");
+    raylib::set_window_min_size(360, 360);
     raylib::set_target_fps(60);
 
     let data = DisplayData {
@@ -321,6 +324,7 @@ fn main() {
         held_key: 0,
         held_start_tstep: 30,
         held_tstep: 2,
+        draw_change: true,
     };
 
     unsafe {
@@ -337,11 +341,6 @@ fn main() {
     }
 
     #[cfg(target_family = "unix")]
-    while !raylib::window_should_close() {
-        main_loop();
-    }
-
-    #[cfg(target_family = "windows")]
     while !raylib::window_should_close() {
         main_loop();
     }
