@@ -24,37 +24,66 @@ extern "C" fn em_main_loop() {
 }
 
 extern crate raylib;
+extern crate kier;
 
-fn measure_text_lines(
+trait Drawable {
+    fn title(&self) -> &[u8];
+    fn description(&self) -> &[u8];
+}
+
+impl Drawable for kier::Card {
+    fn title(&self) -> &[u8] {
+        return self.name;
+    }
+
+    fn description(&self) -> &[u8] {
+        return self.description;
+    }
+}
+
+impl Drawable for kier::Feature {
+    fn title(&self) -> &[u8] {
+        return self.name;
+    }
+
+    fn description(&self) -> &[u8] {
+        return self.description;
+    }
+}
+
+fn count_text_lines(
     text: &[u8], width: i32, font_size: i32
 ) -> i32 {
+    let mut lines: i32 = 1;
     let mut x: i32 = 0;
-    let mut y: i32 = 0;
     let mut words = text.split(|&c| {
         c == b' '
     });
     let x_offset = font_size / 2;
-    let y_offset = font_size + (font_size / 4);
 
     while let Some(word) = words.next() {
         let word_width = raylib::measure_text(&word, font_size);
 
         if x + word_width > width {
             x = 0;
-            y += y_offset;
+            lines += 1;
         }
  
         x += word_width + x_offset;
     }
-    y + y_offset
+    lines
 }
 
 fn draw_text_lines(
-    text: &[u8], start_x: i32, start_y: i32, width: i32,
-    font_size: i32, show_cursor: bool, cursor_pos: usize
-) {
+    text: &[u8],
+    start_x: i32, start_y: i32,
+    width: i32, height: i32,
+    scroll: i32,
+    font_size: i32,
+    show_cursor: bool, cursor_pos: usize
+) -> bool {
     let mut x = 0;
-    let mut y = 0;
+    let mut line = 0;
     let mut ccount = 0;
     let mut words = text.split(|&c| {
         c == b' '
@@ -62,38 +91,88 @@ fn draw_text_lines(
     let x_offset = font_size / 2;
     let y_offset = font_size + (font_size / 4);
 
+    let text_lines = count_text_lines(
+        text,
+        width,
+        font_size
+    );
+    let nlines = std::cmp::min(height / y_offset, text_lines);
+    let sline = std::cmp::min(scroll, text_lines - nlines);
+
     while let Some(word) = words.next() {
         let word_width = raylib::measure_text(&word, font_size);
 
         if x + word_width > width {
             x = 0;
-            y += y_offset;
+            line += 1;
         }
 
-        if show_cursor && cursor_pos >= ccount 
-            && ccount + word.len() >= cursor_pos
-        {
-            let char_offset = cursor_pos - ccount;
-            let cx1 = raylib::measure_text(
-                &word[0..char_offset], font_size
-            );
-            raylib::draw_rectangle(
-                start_x + x + cx1, start_y + y, 2, font_size,
+        if line >= sline + nlines {
+            break;
+        }
+
+        if line >= sline {
+            if show_cursor && cursor_pos >= ccount 
+                && ccount + word.len() >= cursor_pos
+            {
+                let char_offset = cursor_pos - ccount;
+                let cx1 = raylib::measure_text(
+                    &word[0..char_offset], font_size
+                );
+                raylib::draw_rectangle(
+                    start_x + x + cx1, 
+                    start_y + (line - sline) * y_offset,
+                    2,
+                    font_size,
+                    raylib::color::RAYWHITE
+                );
+            }
+
+            raylib::draw_text(
+                &word,
+                start_x + x,
+                start_y + (line - sline) * y_offset,
+                font_size,
                 raylib::color::RAYWHITE
             );
         }
-
-        raylib::draw_text(
-            &word,
-            start_x + x,
-            start_y + y,
-            font_size,
-            raylib::color::RAYWHITE
-        );
         
         x += word_width + x_offset;
         ccount += word.len() + 1;
     }
+    
+    ((line < text_lines - 1) && (x > 0)) ||
+        ((line < text_lines) && (x == 0))
+}
+
+fn draw_card_box<T>(
+    card: impl Drawable,
+    x: i32, y: i32,
+    width: i32, height: i32,
+    font_size: i32,
+    bwidth: i32,
+    scroll: i32
+) {
+    raylib::draw_rectangle(
+        x, y, width, height, raylib::color::RAYWHITE
+    );
+    raylib::draw_rectangle(
+        x + bwidth,
+        y + bwidth,
+        width - 2 * bwidth,
+        height - 2 * bwidth,
+        raylib::color::DARKGRAY
+    );
+
+    draw_text_lines(
+        card.description(),
+        x + 2 * bwidth, y + 2 * bwidth,
+        width - 4 * bwidth, height - 4 * bwidth,
+        scroll,
+        font_size,
+        false,
+        0
+    );
 }
 
 const MCAPACITY: usize = 100;
@@ -103,7 +182,7 @@ const LINE_HEIGHT: i32 = FONT_SIZE + FONT_SIZE / 4;
 
 #[repr(C)]
 struct DisplayData {
-    messages: VecDeque::<Vec::<u8>>,
+    messages: Vec::<u8>,
     text: Vec::<u8>,
     width: i32,
     height: i32,
@@ -113,16 +192,17 @@ struct DisplayData {
     mshift: i32,
     can_shift_up: bool,
     cursor_inst: u32,
-    cursor_tstep: u32,
     held_inst: u32,
     held_start: u32,
     held_key: i32,
-    held_start_tstep: u32,
-    held_tstep: u32,
     draw_change: bool,
 }
 
 fn main_loop() {
+    const HSTART_TSTEP: u32 = 30;
+    const HELD_TSTEP: u32 = 2;
+    const CURSOR_TSTEP: u32 = 31;
+
     let mut data: &mut DisplayData;
     unsafe {
         data = DISPLAY_DATA.as_mut().unwrap();
@@ -144,9 +224,8 @@ fn main_loop() {
         data.held_start = 0;
     } else if data.held_key != 0 {
         if !raylib::keyboard::is_key_up(data.held_key) {
-            if data.held_start > data.held_start_tstep
-            {
-                if data.held_inst > data.held_tstep {
+            if data.held_start > HSTART_TSTEP {
+                if data.held_inst > HELD_TSTEP {
                     key = data.held_key;
                     data.held_inst = 0;
                 }
@@ -192,13 +271,10 @@ fn main_loop() {
         },
         raylib::keyboard::ENTER => {
             if data.text.len() > 0 {
-                if data.messages.len() >= MCAPACITY {
-                    data.messages.pop_front();
-                }
-                data.messages.push_back(data.text.clone());
+                data.text.push(b' ');
+                data.messages.append(&mut data.text);
                 data.mshift = 0;
             }
-            data.text.clear();
             data.cursor_pos = 0;
         },
         key => {
@@ -220,12 +296,12 @@ fn main_loop() {
         data.draw_change = true;
     }
 
-    let typing_height = measure_text_lines(
+    let typing_lines = count_text_lines(
         &data.text, data.width - 2 * LINE_HEIGHT, FONT_SIZE
     );
-    let typing_y = data.height - LINE_HEIGHT - typing_height;
+    let typing_y = data.height - (typing_lines + 1) * LINE_HEIGHT;
 
-    if data.cursor_inst > data.cursor_tstep {
+    if data.cursor_inst > CURSOR_TSTEP {
         data.show_cursor = !data.show_cursor;
         data.cursor_inst = 0;
         data.draw_change = true;
@@ -234,45 +310,35 @@ fn main_loop() {
     raylib::begin_drawing(); 
 
     if data.draw_change {
-        let mut message_y: i32 = typing_y + data.mshift * LINE_HEIGHT;
-
         data.draw_change = false;
         data.can_shift_up = false;
 
         raylib::clear_background(raylib::color::DARKGRAY);
 
         // draw messages
-        for message in data.messages.iter().rev() {
-            let message_height = measure_text_lines(
-                &message, data.width - 2 * LINE_HEIGHT, FONT_SIZE
-            );
+        data.can_shift_up = draw_text_lines(
+            &data.messages,
+            LINE_HEIGHT,
+            LINE_HEIGHT,
+            data.width - 2 * LINE_HEIGHT,
+            typing_y - LINE_HEIGHT,
+            data.mshift,
+            FONT_SIZE,
+            false,
+            0
+        );
 
-            message_y -= message_height + LINE_HEIGHT;
-
-            if message_y < LINE_HEIGHT {
-                data.can_shift_up = true;
-            }
-
-            draw_text_lines(
-                &message,
-                LINE_HEIGHT,
-                message_y,
-                data.width - 2 * LINE_HEIGHT,
-                FONT_SIZE,
-                false,
-                0
-            ); 
-        }
 
         // top border box
-        raylib::draw_rectangle(
+        /*raylib::draw_rectangle(
             0,
             0,
             data.width,
             LINE_HEIGHT,
             raylib::color::DARKGRAY
-        );
+        );*/
 
+        /*
         // bottom border box
         raylib::draw_rectangle(
             0,
@@ -280,14 +346,16 @@ fn main_loop() {
             data.width,
             data.height - typing_y + LINE_HEIGHT,
             raylib::color::DARKGRAY
-        );
+        );*/
 
         // typing box
         draw_text_lines(
             &data.text,
             LINE_HEIGHT,
-            typing_y,
+            typing_y - LINE_HEIGHT,
             data.width - 2 * LINE_HEIGHT,
+            1000,
+            0,
             FONT_SIZE,
             data.show_cursor,
             data.cursor_pos
@@ -306,9 +374,7 @@ fn main() {
     raylib::set_target_fps(60);
 
     let data = DisplayData {
-        messages: VecDeque::<Vec::<u8>>::with_capacity(
-            MCAPACITY
-        ),
+        messages: Vec::<u8>::new(),
         text: Vec::<u8>::new(),
         width: raylib::get_screen_width(),
         height: raylib::get_screen_height(),
@@ -318,12 +384,9 @@ fn main() {
         mshift: 0,
         can_shift_up: false,
         cursor_inst: 0,
-        cursor_tstep: 31,
         held_inst: 0,
         held_start: 0,
         held_key: 0,
-        held_start_tstep: 30,
-        held_tstep: 2,
         draw_change: true,
     };
 
