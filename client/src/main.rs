@@ -1,4 +1,7 @@
-use std::collections::VecDeque;
+extern crate raylib;
+extern crate text_box;
+
+use text_box::TextWindow;
 
 #[cfg(target_family = "wasm")]
 extern "C" {
@@ -23,287 +26,37 @@ extern "C" fn em_main_loop() {
     main_loop();
 }
 
-extern crate raylib;
-extern crate kier;
-
-trait Drawable {
-    fn title(&self) -> &[u8];
-    fn description(&self) -> &[u8];
-}
-
-impl Drawable for kier::Card {
-    fn title(&self) -> &[u8] {
-        return self.name;
-    }
-
-    fn description(&self) -> &[u8] {
-        return self.description;
-    }
-}
-
-impl Drawable for kier::Feature {
-    fn title(&self) -> &[u8] {
-        return self.name;
-    }
-
-    fn description(&self) -> &[u8] {
-        return self.description;
-    }
-}
-
-fn count_text_lines(
-    text: &[u8], width: i32, font_size: i32
-) -> i32 {
-    let mut lines: i32 = 1;
-    let mut x: i32 = 0;
-    let mut words = text.split(|&c| {
-        c == b' '
-    });
-    let x_offset = font_size / 2;
-
-    while let Some(word) = words.next() {
-        let word_width = raylib::measure_text(&word, font_size);
-
-        if x + word_width > width {
-            x = 0;
-            lines += 1;
-        }
- 
-        x += word_width + x_offset;
-    }
-    lines
-}
-
-fn draw_text_lines(
-    text: &[u8],
-    start_x: i32, start_y: i32,
-    width: i32, height: i32,
-    scroll: i32,
-    font_size: i32,
-    show_cursor: bool, cursor_pos: usize
-) -> bool {
-    let mut x = 0;
-    let mut line = 0;
-    let mut ccount = 0;
-    let mut words = text.split(|&c| {
-        c == b' '
-    });
-    let x_offset = font_size / 2;
-    let y_offset = font_size + (font_size / 4);
-
-    let text_lines = count_text_lines(
-        text,
-        width,
-        font_size
-    );
-    let nlines = std::cmp::min(height / y_offset, text_lines);
-    let sline = std::cmp::min(scroll, text_lines - nlines);
-
-    while let Some(word) = words.next() {
-        let word_width = raylib::measure_text(&word, font_size);
-
-        if x + word_width > width {
-            x = 0;
-            line += 1;
-        }
-
-        if line >= sline + nlines {
-            break;
-        }
-
-        if line >= sline {
-            if show_cursor && cursor_pos >= ccount 
-                && ccount + word.len() >= cursor_pos
-            {
-                let char_offset = cursor_pos - ccount;
-                let cx1 = raylib::measure_text(
-                    &word[0..char_offset], font_size
-                );
-                raylib::draw_rectangle(
-                    start_x + x + cx1, 
-                    start_y + (line - sline) * y_offset,
-                    2,
-                    font_size,
-                    raylib::color::RAYWHITE
-                );
-            }
-
-            raylib::draw_text(
-                &word,
-                start_x + x,
-                start_y + (line - sline) * y_offset,
-                font_size,
-                raylib::color::RAYWHITE
-            );
-        }
-        
-        x += word_width + x_offset;
-        ccount += word.len() + 1;
-    }
-    
-    ((line < text_lines - 1) && (x > 0)) ||
-        ((line < text_lines) && (x == 0))
-}
-
-fn draw_card_box<T>(
-    card: impl Drawable,
-    x: i32, y: i32,
-    width: i32, height: i32,
-    font_size: i32,
-    bwidth: i32,
-    scroll: i32
-) {
-    raylib::draw_rectangle(
-        x, y, width, height, raylib::color::RAYWHITE
-    );
-    raylib::draw_rectangle(
-        x + bwidth,
-        y + bwidth,
-        width - 2 * bwidth,
-        height - 2 * bwidth,
-        raylib::color::DARKGRAY
-    );
-
-    draw_text_lines(
-        card.description(),
-        x + 2 * bwidth, y + 2 * bwidth,
-        width - 4 * bwidth, height - 4 * bwidth,
-        scroll,
-        font_size,
-        false,
-        0
-    );
-}
-
-const MCAPACITY: usize = 100;
-const MTEXT_LEN: usize = 10000;
-const FONT_SIZE: i32 = 24;
-const LINE_HEIGHT: i32 = FONT_SIZE + FONT_SIZE / 4;
-
 #[repr(C)]
 struct DisplayData {
-    messages: Vec::<u8>,
-    text: Vec::<u8>,
+    text: TextWindow,
     width: i32,
     height: i32,
-    caps: bool,
-    show_cursor: bool,
-    cursor_pos: usize,
-    mshift: i32,
-    can_shift_up: bool,
-    cursor_inst: u32,
-    held_inst: u32,
-    held_start: u32,
-    held_key: i32,
     draw_change: bool,
 }
 
 fn main_loop() {
-    const HSTART_TSTEP: u32 = 30;
-    const HELD_TSTEP: u32 = 2;
-    const CURSOR_TSTEP: u32 = 31;
-
     let mut data: &mut DisplayData;
     unsafe {
         data = DISPLAY_DATA.as_mut().unwrap();
     }
 
-    data.cursor_inst += 1;
-    data.held_start += 1;
-    data.held_inst += 1;
-
-    let mut key = raylib::keyboard::get_key_pressed();
-    let shift = !raylib::keyboard::is_key_up(
-        raylib::keyboard::LEFT_SHIFT
-    ) || !raylib::keyboard::is_key_up(
-        raylib::keyboard::RIGHT_SHIFT
-    );
- 
-    if key != 0 {
-        data.held_key = key;
-        data.held_start = 0;
-    } else if data.held_key != 0 {
-        if !raylib::keyboard::is_key_up(data.held_key) {
-            if data.held_start > HSTART_TSTEP {
-                if data.held_inst > HELD_TSTEP {
-                    key = data.held_key;
-                    data.held_inst = 0;
-                }
-            }
-        } else {
-            data.held_key = 0;
-        }
-    }
-
-    if key != 0 {
-        data.draw_change = true;
-        data.show_cursor = true;
-        data.cursor_inst = 0;
-    }
-
-    match key {
-        raylib::keyboard::CAPS_LOCK => data.caps = !data.caps,
-        raylib::keyboard::BACKSPACE => {
-            if data.cursor_pos > 0 {
-                data.text.remove(data.cursor_pos - 1);
-                data.cursor_pos -= 1;
-            }
-        },
-        raylib::keyboard::LEFT => {
-            if data.cursor_pos > 0 {
-                data.cursor_pos -= 1;
-            }
-        },
-        raylib::keyboard::RIGHT => {
-            if data.cursor_pos < data.text.len() {
-                data.cursor_pos += 1;
-            }
-        },
-        raylib::keyboard::UP => {
-            if data.can_shift_up {
-                data.mshift += 1;
-            }
-        },
-        raylib::keyboard::DOWN => {
-            if data.mshift > 0 {
-                data.mshift -= 1;
-            }
-        },
-        raylib::keyboard::ENTER => {
-            if data.text.len() > 0 {
-                data.text.push(b' ');
-                data.messages.append(&mut data.text);
-                data.mshift = 0;
-            }
-            data.cursor_pos = 0;
-        },
-        key => {
-            if let Some(c) = raylib::keyboard::get_char(
-                key, shift, data.caps
-            ) {
-                if data.text.len() < MTEXT_LEN {
-                    data.text.insert(data.cursor_pos, c);
-                    data.cursor_pos += 1;
-                }
-            }
-        },
-    }
-
     if raylib::is_window_resized() {
         data.width = raylib::get_screen_width();
         data.height = raylib::get_screen_height();
-        data.mshift = 0;
         data.draw_change = true;
+        data.text.set_size(
+            data.width as f32,
+            data.height as f32
+        );
     }
 
-    let typing_lines = count_text_lines(
-        &data.text, data.width - 2 * LINE_HEIGHT, FONT_SIZE
-    );
-    let typing_y = data.height - (typing_lines + 1) * LINE_HEIGHT;
-
-    if data.cursor_inst > CURSOR_TSTEP {
-        data.show_cursor = !data.show_cursor;
-        data.cursor_inst = 0;
+    let key = raylib::keyboard::get_key_pressed();
+    if key == raylib::keyboard::UP {
+        data.text.scroll(-1);
+        data.draw_change = true;
+    }
+    if key == raylib::keyboard::DOWN {
+        data.text.scroll(1);
         data.draw_change = true;
     }
 
@@ -311,55 +64,9 @@ fn main_loop() {
 
     if data.draw_change {
         data.draw_change = false;
-        data.can_shift_up = false;
 
         raylib::clear_background(raylib::color::DARKGRAY);
-
-        // draw messages
-        data.can_shift_up = draw_text_lines(
-            &data.messages,
-            LINE_HEIGHT,
-            LINE_HEIGHT,
-            data.width - 2 * LINE_HEIGHT,
-            typing_y - LINE_HEIGHT,
-            data.mshift,
-            FONT_SIZE,
-            false,
-            0
-        );
-
-
-        // top border box
-        /*raylib::draw_rectangle(
-            0,
-            0,
-            data.width,
-            LINE_HEIGHT,
-            raylib::color::DARKGRAY
-        );*/
-
-        /*
-        // bottom border box
-        raylib::draw_rectangle(
-            0,
-            typing_y - LINE_HEIGHT,
-            data.width,
-            data.height - typing_y + LINE_HEIGHT,
-            raylib::color::DARKGRAY
-        );*/
-
-        // typing box
-        draw_text_lines(
-            &data.text,
-            LINE_HEIGHT,
-            typing_y - LINE_HEIGHT,
-            data.width - 2 * LINE_HEIGHT,
-            1000,
-            0,
-            FONT_SIZE,
-            data.show_cursor,
-            data.cursor_pos
-        ); 
+        data.text.draw();
     }
 
     raylib::end_drawing();    
@@ -373,20 +80,42 @@ fn main() {
     raylib::set_window_min_size(360, 360);
     raylib::set_target_fps(60);
 
+    let text_box = TextWindow::new(
+        "hello this is a nice test of my very nice text box drawing software. oh boy oh BOY do I hope this works and looks nice! here is a whole lot more text so I cant test out whether scrolling works. oh boy do I hope scrolling workks, if that workds then I don't know what I will do! I might just go downstairs and take a short break, or maybe watch an episode of something like the devil is a part timer or Spy x Family! I love those shows, comedy anime are actually pretty great!",
+        |s| {
+            let parts = s.split(|c| {
+                c == '.' || c == ',' || c == '!'
+                    || c == '?'
+            });
+
+            for part in parts {
+                if part == "software" {
+                    return true;
+                }
+            }
+            false
+        },
+        raylib::Rectangle {
+            x: 0.0, y: 0.0,
+            width: raylib::get_screen_width() as f32,
+            height: raylib::get_screen_width() as f32,
+        },
+        6.0,
+        4.0,
+        raylib::color::MEDGRAY,
+        raylib::color::RAYWHITE,
+        raylib::get_font_default(),
+        20.0,
+        1.0,
+        raylib::color::RAYWHITE,
+        raylib::color::YELLOW,
+        1.5
+    );
+
     let data = DisplayData {
-        messages: Vec::<u8>::new(),
-        text: Vec::<u8>::new(),
+        text: text_box,
         width: raylib::get_screen_width(),
         height: raylib::get_screen_height(),
-        caps: false,
-        show_cursor: true,
-        cursor_pos: 0,
-        mshift: 0,
-        can_shift_up: false,
-        cursor_inst: 0,
-        held_inst: 0,
-        held_start: 0,
-        held_key: 0,
         draw_change: true,
     };
 

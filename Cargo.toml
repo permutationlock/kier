@@ -2,18 +2,3 @@
 name = "kier"
 version = "0.1.0"
 edition = "2021"
-
-[features]
-default = ["logging"]
-logging = ["log"]
-
-[dependencies]
-env_logger = "0.9"
-libc = "0.2"
-rustls = "0.20"
-rustls-pemfile = "1.0"
-docopt = "~1.1"
-log = { version = "0.4.4", optional = true }
-mio = { version = "0.8", features = ["net", "os-poll"] }
-serde = "1.0"
-serde_derive = "1.0"

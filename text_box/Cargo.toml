@@ -1,5 +1,5 @@
 [package]
-name = "client"
+name = "text_box"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,4 +7,3 @@ edition = "2021"
 
 [dependencies]
 raylib = { path = "../../raylib" }
-text_box = { path = "../../text_box" }
